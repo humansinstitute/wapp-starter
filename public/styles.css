@@ -275,6 +275,10 @@ textarea:focus {
   box-shadow: var(--shadow-soft);
 }
 
+.widePanel {
+  grid-column: 1 / -1;
+}
+
 .settingsPanel summary {
   cursor: pointer;
   font-weight: 650;
@@ -315,6 +319,74 @@ textarea:focus {
   display: grid;
   gap: 8px;
   margin-top: 14px;
+}
+
+.dbMeta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.dbMeta div,
+.snapshotItem {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.dbMeta strong,
+.dbMeta span,
+.snapshotItem strong,
+.snapshotItem span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dbMeta strong,
+.snapshotItem strong {
+  font-size: 12px;
+}
+
+.dbMeta span,
+.snapshotItem span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.snapshotList {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.snapshotItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.snapshotActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.snapshotActions a {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.snapshotActions button {
+  padding: 7px 10px;
 }
 
 .accessItem {
@@ -435,6 +507,19 @@ textarea:focus {
   white-space: nowrap;
 }
 
+.runControls {
+  display: flex;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.runControls select {
+  width: min(260px, 38vw);
+  min-height: 34px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
 .status {
   color: var(--muted);
   font-size: 13px;
@@ -523,6 +608,10 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .dbMeta {
+    grid-template-columns: 1fr;
+  }
+
   .shell {
     grid-template-columns: 1fr;
   }
@@ -539,5 +628,18 @@ textarea {
 
   .chatPane {
     height: calc(100vh - 238px);
+  }
+
+  .chatHeader {
+    height: auto;
+    align-items: flex-start;
+  }
+
+  .runControls {
+    flex-direction: column;
+  }
+
+  .runControls select {
+    width: min(72vw, 360px);
   }
 }

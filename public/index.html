@@ -40,6 +40,14 @@
             <div class="settingsPanel">
               <h2>Autopilot</h2>
               <label>
+                <span>Target</span>
+                <select id="autopilotTargetSelect"></select>
+              </label>
+              <label>
+                <span>Target label</span>
+                <input id="autopilotLabelInput" type="text" placeholder="Rick local" />
+              </label>
+              <label>
                 <span>Autopilot URL</span>
                 <input id="autopilotUrlInput" type="url" placeholder="http://127.0.0.1:3256" />
               </label>
@@ -51,6 +59,8 @@
               <div class="settingsActions">
                 <button id="loadPipelinesButton" type="button">Refresh Pipelines</button>
                 <button id="saveSettingsButton" type="button">Save</button>
+                <button id="newTargetButton" type="button">New Target</button>
+                <button id="deleteTargetButton" type="button">Delete Target</button>
               </div>
             </div>
             <div class="settingsPanel">
@@ -68,6 +78,27 @@
               </label>
               <button id="addAccessButton" type="button">Add access</button>
               <div id="accessList" class="accessList"></div>
+            </div>
+            <div class="settingsPanel widePanel">
+              <h2>SQLite Reference DB</h2>
+              <div class="dbMeta" id="dbMeta"></div>
+              <label>
+                <span>Snapshot note</span>
+                <input id="snapshotNoteInput" type="text" placeholder="Before testing migration 004" />
+              </label>
+              <div class="settingsActions">
+                <button id="refreshDbButton" type="button">Refresh DB</button>
+                <button id="exportDbButton" type="button">Export Snapshot</button>
+              </div>
+              <label>
+                <span>Import SQLite file</span>
+                <input id="importDbInput" type="file" accept=".sqlite,.db,application/vnd.sqlite3,application/octet-stream" />
+              </label>
+              <div class="settingsActions">
+                <button id="importDbButton" type="button">Stage Import</button>
+                <button id="clearImportButton" type="button">Clear Pending</button>
+              </div>
+              <div id="snapshotList" class="snapshotList"></div>
             </div>
           </section>
         </div>
@@ -88,7 +119,13 @@
 
         <section class="chatPane">
           <header class="chatHeader">
-            <h2 id="chatTitle">New chat</h2>
+            <div>
+              <h2 id="chatTitle">New chat</h2>
+              <div class="runControls">
+                <select id="chatAutopilotSelect" title="Autopilot target"></select>
+                <select id="chatPipelineSelect" title="Pipeline"></select>
+              </div>
+            </div>
             <div class="status" id="status">Ready</div>
           </header>
           <div class="messages" id="messages"></div>

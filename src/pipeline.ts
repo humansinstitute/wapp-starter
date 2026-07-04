@@ -9,6 +9,8 @@ export type PipelineStartInput = {
   history: Array<Pick<Message, "role" | "content" | "createdAt">>;
   webhookUrl: string;
   webhookToken: string;
+  autopilotTargetId?: string;
+  autopilotLabel?: string;
   autopilotUrl?: string;
   pipelineName?: string;
 };
@@ -26,6 +28,9 @@ export type PipelineTriggerRequest = {
     input: {
       source: "chat-wapp";
       chatId: string;
+      autopilotTargetId?: string;
+      autopilotLabel?: string;
+      pipelineName: string;
       userPubkey: string;
       userNpub: string;
       message: string;
@@ -50,6 +55,9 @@ export function buildPipelineTriggerRequest(input: PipelineStartInput): Pipeline
       input: {
         source: "chat-wapp",
         chatId: input.chatId,
+        autopilotTargetId: input.autopilotTargetId,
+        autopilotLabel: input.autopilotLabel,
+        pipelineName,
         userPubkey: input.userPubkey,
         userNpub: input.userNpub,
         message: input.message,

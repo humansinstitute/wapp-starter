@@ -2,97 +2,15 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { Database } from "bun:sqlite";
 import { DB_PATH } from "./config.ts";
+import { applyPendingDbImport, runMigrations } from "./migrations.ts";
 
 mkdirSync(dirname(DB_PATH), { recursive: true });
+applyPendingDbImport();
 
 export const db = new Database(DB_PATH);
 db.exec("PRAGMA journal_mode = WAL");
 db.exec("PRAGMA foreign_keys = ON");
-
-db.exec(`
-CREATE TABLE IF NOT EXISTS users (
-  pubkey TEXT PRIMARY KEY,
-  npub TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  last_seen_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS login_challenges (
-  pubkey TEXT PRIMARY KEY,
-  nonce TEXT NOT NULL,
-  expires_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS sessions (
-  token TEXT PRIMARY KEY,
-  pubkey TEXT NOT NULL,
-  expires_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
-  FOREIGN KEY (pubkey) REFERENCES users(pubkey) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS chats (
-  id TEXT PRIMARY KEY,
-  pubkey TEXT NOT NULL,
-  title TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  FOREIGN KEY (pubkey) REFERENCES users(pubkey) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS messages (
-  id TEXT PRIMARY KEY,
-  chat_id TEXT NOT NULL,
-  pubkey TEXT NOT NULL,
-  role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
-  content TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'complete',
-  run_id TEXT,
-  created_at INTEGER NOT NULL,
-  FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS pipeline_runs (
-  id TEXT PRIMARY KEY,
-  chat_id TEXT NOT NULL,
-  user_message_id TEXT NOT NULL,
-  assistant_message_id TEXT NOT NULL,
-  trigger_status TEXT NOT NULL,
-  autopilot_run_id TEXT,
-  webhook_token TEXT NOT NULL,
-  trigger_payload_json TEXT,
-  error TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS app_settings (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS access_rules (
-  pubkey TEXT NOT NULL,
-  npub TEXT NOT NULL,
-  role TEXT NOT NULL CHECK(role IN ('read', 'edit')),
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (pubkey, role)
-);
-`);
-
-for (const migration of [
-  "ALTER TABLE pipeline_runs ADD COLUMN trigger_payload_json TEXT",
-  "DELETE FROM access_rules WHERE role = 'login'",
-]) {
-  try {
-    db.query(migration).run();
-  } catch {
-    // Column already exists on an existing local demo database.
-  }
-}
+runMigrations(db);
 
 export type Session = {
   token: string;
@@ -122,6 +40,8 @@ export type Message = {
 export type AppSettings = {
   autopilotUrl: string;
   defaultPipeline: string;
+  currentAutopilotTargetId: string;
+  autopilotTargets: AutopilotTarget[];
 };
 
 export type AccessRole = "read" | "edit";
@@ -131,6 +51,24 @@ export type AccessRule = {
   npub: string;
   role: AccessRole;
   createdAt: number;
+};
+
+export type AutopilotTarget = {
+  id: string;
+  label: string;
+  url: string;
+  defaultPipeline: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type DbSnapshot = {
+  id: string;
+  filename: string;
+  kind: "manual" | "pre-migration" | "pre-import";
+  sizeBytes: number;
+  createdAt: number;
+  note: string | null;
 };
 
 export function mapChat(row: Record<string, unknown>): Chat {
@@ -176,4 +114,80 @@ export function mapAccessRule(row: Record<string, unknown>): AccessRule {
     role: String(row.role) as AccessRole,
     createdAt: Number(row.created_at),
   };
+}
+
+export function mapAutopilotTarget(row: Record<string, unknown>): AutopilotTarget {
+  return {
+    id: String(row.id),
+    label: String(row.label),
+    url: String(row.url).replace(/\/$/, ""),
+    defaultPipeline: String(row.default_pipeline),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+export function listAutopilotTargets(): AutopilotTarget[] {
+  const rows = db.query("SELECT * FROM autopilot_targets ORDER BY updated_at DESC, label ASC").all() as Record<string, unknown>[];
+  return rows.map(mapAutopilotTarget);
+}
+
+export function getAutopilotTarget(id: string | null): AutopilotTarget | null {
+  if (!id) return null;
+  const row = db.query("SELECT * FROM autopilot_targets WHERE id = ?1").get(id) as Record<string, unknown> | null;
+  return row ? mapAutopilotTarget(row) : null;
+}
+
+export function getCurrentAutopilotTarget(): AutopilotTarget {
+  const currentId = getSetting("currentAutopilotTargetId");
+  const selected = getAutopilotTarget(currentId);
+  if (selected) return selected;
+  const first = listAutopilotTargets()[0];
+  if (!first) throw new Error("No Autopilot targets are configured");
+  setSetting("currentAutopilotTargetId", first.id);
+  return first;
+}
+
+export function upsertAutopilotTarget(input: {
+  id?: string;
+  label: string;
+  url: string;
+  defaultPipeline: string;
+}): AutopilotTarget {
+  const now = Date.now();
+  const id = input.id?.trim() || crypto.randomUUID();
+  db.query(`
+    INSERT INTO autopilot_targets(id, label, url, default_pipeline, created_at, updated_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+    ON CONFLICT(id) DO UPDATE SET
+      label = excluded.label,
+      url = excluded.url,
+      default_pipeline = excluded.default_pipeline,
+      updated_at = excluded.updated_at
+  `).run(id, input.label.trim(), input.url.replace(/\/$/, ""), input.defaultPipeline.trim(), now);
+  return getAutopilotTarget(id)!;
+}
+
+export function deleteAutopilotTarget(id: string): void {
+  db.query("DELETE FROM autopilot_targets WHERE id = ?1").run(id);
+  if (getSetting("currentAutopilotTargetId") === id) {
+    const next = listAutopilotTargets()[0];
+    if (next) setSetting("currentAutopilotTargetId", next.id);
+  }
+}
+
+export function mapDbSnapshot(row: Record<string, unknown>): DbSnapshot {
+  return {
+    id: String(row.id),
+    filename: String(row.filename),
+    kind: String(row.kind) as DbSnapshot["kind"],
+    sizeBytes: Number(row.size_bytes),
+    createdAt: Number(row.created_at),
+    note: row.note == null ? null : String(row.note),
+  };
+}
+
+export function listDbSnapshots(): DbSnapshot[] {
+  const rows = db.query("SELECT * FROM db_snapshots ORDER BY created_at DESC LIMIT 100").all() as Record<string, unknown>[];
+  return rows.map(mapDbSnapshot);
 }

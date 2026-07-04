@@ -1,5 +1,20 @@
 export const PORT = Number(process.env.PORT || 3000);
-export const DB_PATH = process.env.CHAT_WAPP_DB_PATH || "data/chat-wapp.sqlite";
+
+function databasePathFromEnv(): string {
+  if (process.env.CHAT_WAPP_DB_PATH) return process.env.CHAT_WAPP_DB_PATH;
+  if (process.env.WAPP_DB_PATH) return process.env.WAPP_DB_PATH;
+  if (process.env.SQLITE_PATH) return process.env.SQLITE_PATH;
+  if (process.env.DATABASE_PATH) return process.env.DATABASE_PATH;
+  if (process.env.DATABASE_URL?.startsWith("file:")) {
+    return process.env.DATABASE_URL.slice("file:".length);
+  }
+  return "data/chat-wapp.sqlite";
+}
+
+export const DB_PATH = databasePathFromEnv();
+export const DB_SNAPSHOT_DIR = process.env.CHAT_WAPP_DB_SNAPSHOT_DIR || "data/snapshots";
+export const DB_IMPORT_DIR = process.env.CHAT_WAPP_DB_IMPORT_DIR || "data/imports";
+export const DB_BACKUP_DIR = process.env.CHAT_WAPP_DB_BACKUP_DIR || "data/backups";
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 export const PIPELINE_NAME = process.env.CHAT_WAPP_PIPELINE_NAME || "chat-wapp-agent-response";

@@ -15,7 +15,23 @@ import {
   verifyNip98Request,
 } from "./auth.ts";
 import { PIPELINE_NAME, PORT, PUBLIC_ORIGIN, WINGMAN_URL } from "./config.ts";
-import { db, getSetting, mapChat, mapMessage, setSetting, type AccessRole, type AppSettings, type Message } from "./db.ts";
+import {
+  db,
+  deleteAutopilotTarget,
+  getAutopilotTarget,
+  getCurrentAutopilotTarget,
+  getSetting,
+  listAutopilotTargets,
+  mapChat,
+  mapMessage,
+  setSetting,
+  upsertAutopilotTarget,
+  type AccessRole,
+  type AppSettings,
+  type AutopilotTarget,
+  type Message,
+} from "./db.ts";
+import { clearPendingImport, exportSnapshot, getDbStatus, snapshotPath, stageSnapshotImport, stageUploadedImport } from "./db-admin.ts";
 import { buildPipelineTriggerRequest, startPreparedChatPipeline, type PipelineTriggerRequest } from "./pipeline.ts";
 
 const PUBLIC_DIR = join(import.meta.dir, "..", "public");
@@ -56,9 +72,13 @@ function requireSession(req: Request) {
 }
 
 function getAppSettings(): AppSettings {
+  const targets = listAutopilotTargets();
+  const selected = getCurrentAutopilotTarget();
   return {
-    autopilotUrl: (getSetting("autopilotUrl") || WINGMAN_URL).replace(/\/$/, ""),
-    defaultPipeline: getSetting("defaultPipeline") || PIPELINE_NAME,
+    autopilotUrl: selected.url || (getSetting("autopilotUrl") || WINGMAN_URL).replace(/\/$/, ""),
+    defaultPipeline: selected.defaultPipeline || getSetting("defaultPipeline") || PIPELINE_NAME,
+    currentAutopilotTargetId: selected.id,
+    autopilotTargets: targets,
   };
 }
 
@@ -77,9 +97,14 @@ function normalizePipelineName(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function buildAutopilotPipelinesRequest(settings = getAppSettings()) {
+function getRequestedAutopilotTarget(value: unknown): AutopilotTarget {
+  const targetId = typeof value === "string" && value.trim() ? value.trim() : getAppSettings().currentAutopilotTargetId;
+  return getAutopilotTarget(targetId) || getCurrentAutopilotTarget();
+}
+
+function buildAutopilotPipelinesRequest(target = getCurrentAutopilotTarget()) {
   return {
-    url: new URL("/api/pipelines/definitions", settings.autopilotUrl).toString(),
+    url: new URL("/api/pipelines/definitions", target.url).toString(),
     method: "GET" as const,
   };
 }
@@ -159,12 +184,57 @@ async function handleApi(req: Request, url: URL): Promise<Response | null> {
     const session = requireEditSession(req);
     if (!session) return json({ error: "edit access required" }, 403);
     const body = await readJson(req);
+    const targetId = typeof body.autopilotTargetId === "string" && body.autopilotTargetId.trim()
+      ? body.autopilotTargetId.trim()
+      : getAppSettings().currentAutopilotTargetId;
+    const existingTarget = getAutopilotTarget(targetId) || getCurrentAutopilotTarget();
+    const label = typeof body.autopilotLabel === "string" && body.autopilotLabel.trim() ? body.autopilotLabel.trim() : existingTarget.label;
     const autopilotUrl = body.autopilotUrl === undefined ? null : normalizeAutopilotUrl(body.autopilotUrl);
     const defaultPipeline = body.defaultPipeline === undefined ? null : normalizePipelineName(body.defaultPipeline);
     if (body.autopilotUrl !== undefined && !autopilotUrl) return json({ error: "autopilotUrl must be a valid http(s) URL" }, 400);
     if (body.defaultPipeline !== undefined && !defaultPipeline) return json({ error: "defaultPipeline is required" }, 400);
-    if (autopilotUrl) setSetting("autopilotUrl", autopilotUrl);
-    if (defaultPipeline) setSetting("defaultPipeline", defaultPipeline);
+    const updated = upsertAutopilotTarget({
+      id: existingTarget.id,
+      label,
+      url: autopilotUrl || existingTarget.url,
+      defaultPipeline: defaultPipeline || existingTarget.defaultPipeline,
+    });
+    setSetting("currentAutopilotTargetId", updated.id);
+    return json({ settings: getAppSettings() });
+  }
+
+  if (pathname === "/api/autopilot-targets" && req.method === "POST") {
+    const session = requireEditSession(req);
+    if (!session) return json({ error: "edit access required" }, 403);
+    const body = await readJson(req);
+    const label = typeof body.label === "string" && body.label.trim() ? body.label.trim() : "New Autopilot";
+    const url = normalizeAutopilotUrl(body.url);
+    const defaultPipeline = normalizePipelineName(body.defaultPipeline);
+    if (!url) return json({ error: "url must be a valid http(s) URL" }, 400);
+    if (!defaultPipeline) return json({ error: "defaultPipeline is required" }, 400);
+    const target = upsertAutopilotTarget({ label, url, defaultPipeline });
+    setSetting("currentAutopilotTargetId", target.id);
+    return json({ target, settings: getAppSettings() }, 201);
+  }
+
+  const autopilotTargetMatch = pathname.match(/^\/api\/autopilot-targets\/([^/]+)$/);
+  if (autopilotTargetMatch && req.method === "DELETE") {
+    const session = requireEditSession(req);
+    if (!session) return json({ error: "edit access required" }, 403);
+    const id = decodeURIComponent(autopilotTargetMatch[1]!);
+    if (listAutopilotTargets().length <= 1) return json({ error: "at least one Autopilot target is required" }, 409);
+    deleteAutopilotTarget(id);
+    return json({ ok: true, settings: getAppSettings() });
+  }
+
+  if (pathname === "/api/autopilot-targets/current" && req.method === "PUT") {
+    const session = requireSession(req);
+    if (!session) return json({ error: "unauthorized" }, 401);
+    const body = await readJson(req);
+    const targetId = typeof body.autopilotTargetId === "string" ? body.autopilotTargetId.trim() : "";
+    const target = getAutopilotTarget(targetId);
+    if (!target) return json({ error: "Autopilot target not found" }, 404);
+    setSetting("currentAutopilotTargetId", target.id);
     return json({ settings: getAppSettings() });
   }
 
@@ -199,17 +269,19 @@ async function handleApi(req: Request, url: URL): Promise<Response | null> {
   if (pathname === "/api/autopilot/pipelines-request" && req.method === "GET") {
     const session = requireSession(req);
     if (!session) return json({ error: "unauthorized" }, 401);
-    return json({ triggerRequest: buildAutopilotPipelinesRequest(), settings: getAppSettings() });
+    const target = getRequestedAutopilotTarget(url.searchParams.get("autopilotTargetId"));
+    return json({ triggerRequest: buildAutopilotPipelinesRequest(target), settings: getAppSettings(), target });
   }
 
   if (pathname === "/api/autopilot/pipelines" && req.method === "POST") {
     const session = requireSession(req);
     if (!session) return json({ error: "unauthorized" }, 401);
     const body = await readJson(req);
-    const request = buildAutopilotPipelinesRequest();
+    const target = getRequestedAutopilotTarget(body.autopilotTargetId);
+    const request = buildAutopilotPipelinesRequest(target);
     const autopilotAuthorization = String(body.autopilotAuthorization ?? "").trim();
     if (!autopilotAuthorization) {
-      return json({ requiresAutopilotAuth: true, triggerRequest: request, settings: getAppSettings() }, 202);
+      return json({ requiresAutopilotAuth: true, triggerRequest: request, settings: getAppSettings(), target }, 202);
     }
     const res = await fetch(request.url, {
       method: "GET",
@@ -220,7 +292,59 @@ async function handleApi(req: Request, url: URL): Promise<Response | null> {
     });
     const payload = await res.json().catch(() => ({})) as Record<string, unknown>;
     if (!res.ok) return json({ error: String(payload.error ?? res.statusText), status: res.status }, 502);
-    return json({ pipelines: payload.definitions ?? [], raw: payload });
+    return json({ pipelines: payload.definitions ?? [], raw: payload, target });
+  }
+
+  if (pathname === "/api/db/status" && req.method === "GET") {
+    const session = requireEditSession(req);
+    if (!session) return json({ error: "edit access required" }, 403);
+    return json(getDbStatus());
+  }
+
+  if (pathname === "/api/db/snapshots" && req.method === "POST") {
+    const session = requireEditSession(req);
+    if (!session) return json({ error: "edit access required" }, 403);
+    const body = await readJson(req);
+    return json({ snapshot: exportSnapshot(String(body.note ?? "")), status: getDbStatus() }, 201);
+  }
+
+  const snapshotDownloadMatch = pathname.match(/^\/api\/db\/snapshots\/([^/]+)\/download$/);
+  if (snapshotDownloadMatch && req.method === "GET") {
+    const session = requireEditSession(req);
+    if (!session) return json({ error: "edit access required" }, 403);
+    const filename = decodeURIComponent(snapshotDownloadMatch[1]!);
+    const path = snapshotPath(filename);
+    if (!path) return json({ error: "snapshot not found" }, 404);
+    return new Response(Bun.file(path), {
+      headers: {
+        "content-type": "application/vnd.sqlite3",
+        "content-disposition": `attachment; filename="${filename.replaceAll('"', "")}"`,
+        "cache-control": "no-store",
+      },
+    });
+  }
+
+  if (pathname === "/api/db/import" && req.method === "POST") {
+    const session = requireEditSession(req);
+    if (!session) return json({ error: "edit access required" }, 403);
+    const contentType = req.headers.get("content-type") || "";
+    if (contentType.includes("multipart/form-data")) {
+      const form = await req.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) return json({ error: "file is required" }, 400);
+      return json({ import: await stageUploadedImport(file), status: getDbStatus() }, 202);
+    }
+    const body = await readJson(req);
+    const filename = String(body.filename ?? "");
+    if (!filename) return json({ error: "filename is required" }, 400);
+    return json({ import: stageSnapshotImport(filename), status: getDbStatus() }, 202);
+  }
+
+  if (pathname === "/api/db/import" && req.method === "DELETE") {
+    const session = requireEditSession(req);
+    if (!session) return json({ error: "edit access required" }, 403);
+    clearPendingImport();
+    return json({ ok: true, status: getDbStatus() });
   }
 
   if (pathname === "/api/chats" && req.method === "GET") {
@@ -267,6 +391,8 @@ async function handleApi(req: Request, url: URL): Promise<Response | null> {
     const content = String(body.content ?? "").trim();
     if (!content) return json({ error: "content is required" }, 400);
     if (content.length > 12000) return json({ error: "content is too long" }, 400);
+    const autopilotTarget = getRequestedAutopilotTarget(body.autopilotTargetId);
+    const pipelineName = normalizePipelineName(body.pipelineName) || autopilotTarget.defaultPipeline;
 
     const now = Date.now();
     const userMessageId = crypto.randomUUID();
@@ -295,15 +421,39 @@ async function handleApi(req: Request, url: URL): Promise<Response | null> {
       history,
       webhookUrl,
       webhookToken,
-      autopilotUrl: settings.autopilotUrl,
-      pipelineName: settings.defaultPipeline,
+      autopilotTargetId: autopilotTarget.id,
+      autopilotLabel: autopilotTarget.label,
+      autopilotUrl: autopilotTarget.url || settings.autopilotUrl,
+      pipelineName,
     });
     db.query(`
       INSERT INTO pipeline_runs(
-        id, chat_id, user_message_id, assistant_message_id, trigger_status, webhook_token, trigger_payload_json, created_at, updated_at
+        id,
+        chat_id,
+        user_message_id,
+        assistant_message_id,
+        trigger_status,
+        webhook_token,
+        trigger_payload_json,
+        autopilot_target_id,
+        autopilot_url,
+        pipeline_name,
+        created_at,
+        updated_at
       )
-      VALUES (?1, ?2, ?3, ?4, 'awaiting-user-nip98', ?5, ?6, ?7, ?7)
-    `).run(localRunId, chatId, userMessageId, assistantMessageId, webhookToken, JSON.stringify(triggerRequest), now);
+      VALUES (?1, ?2, ?3, ?4, 'awaiting-user-nip98', ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+    `).run(
+      localRunId,
+      chatId,
+      userMessageId,
+      assistantMessageId,
+      webhookToken,
+      JSON.stringify(triggerRequest),
+      autopilotTarget.id,
+      autopilotTarget.url,
+      pipelineName,
+      now,
+    );
 
     const autopilotAuthorization = typeof body.autopilotAuthorization === "string" ? body.autopilotAuthorization.trim() : "";
     if (!autopilotAuthorization) {

@@ -13,8 +13,11 @@ const state = {
   chats: [],
   settings: null,
   accessRules: [],
+  dbStatus: null,
   pipelines: loadPipelinesCache(),
   activeChatId: localStorage.getItem("chat_wapp_chat") || "",
+  activeAutopilotTargetId: localStorage.getItem("chat_wapp_autopilot_target") || "",
+  activePipelineName: localStorage.getItem("chat_wapp_pipeline") || "",
   pollTimer: null,
   route: window.location.pathname,
   profiles: loadProfileCache(),
@@ -185,6 +188,7 @@ function logout() {
 }
 
 async function loadChatScreen() {
+  await loadRuntimeSettings();
   await loadChats();
   if (!state.activeChatId || !state.chats.find((chat) => chat.id === state.activeChatId)) {
     if (state.chats[0]) state.activeChatId = state.chats[0].id;
@@ -200,36 +204,112 @@ async function loadChats() {
 }
 
 async function loadSettings() {
+  await loadRuntimeSettings();
+  if (state.me?.access?.edit) await loadDbStatus().catch((error) => setStatus(error.message));
+  renderSettings();
+  renderAutopilotTargets();
+  renderPipelineOptions();
+  renderAccessRules();
+  renderDbStatus();
+}
+
+async function loadRuntimeSettings() {
   const payload = await api("/api/settings");
   state.settings = payload.settings;
   state.accessRules = payload.accessRules || [];
-  renderSettings();
-  renderPipelineOptions();
-  renderAccessRules();
+  if (!state.activeAutopilotTargetId) {
+    state.activeAutopilotTargetId = state.settings?.currentAutopilotTargetId || "";
+    if (state.activeAutopilotTargetId) localStorage.setItem("chat_wapp_autopilot_target", state.activeAutopilotTargetId);
+  }
+  const target = currentTarget();
+  if (!state.activePipelineName) {
+    state.activePipelineName = target?.defaultPipeline || state.settings?.defaultPipeline || "";
+    if (state.activePipelineName) localStorage.setItem("chat_wapp_pipeline", state.activePipelineName);
+  }
+  renderChatRunControls();
 }
 
 function renderSettings() {
-  $("autopilotUrlInput").value = state.settings?.autopilotUrl || "";
-  $("pipelineInput").value = state.settings?.defaultPipeline || "";
+  const target = currentTarget() || state.settings?.autopilotTargets?.[0] || null;
+  $("autopilotLabelInput").value = target?.label || "";
+  $("autopilotUrlInput").value = target?.url || state.settings?.autopilotUrl || "";
+  $("pipelineInput").value = target?.defaultPipeline || state.settings?.defaultPipeline || "";
   const canEdit = Boolean(state.me?.access?.edit);
-  for (const id of ["autopilotUrlInput", "pipelineInput", "pipelineSelect", "saveSettingsButton", "accessNpubInput", "accessRoleSelect", "addAccessButton"]) {
+  for (const id of [
+    "autopilotTargetSelect",
+    "autopilotLabelInput",
+    "autopilotUrlInput",
+    "pipelineInput",
+    "pipelineSelect",
+    "saveSettingsButton",
+    "newTargetButton",
+    "deleteTargetButton",
+    "accessNpubInput",
+    "accessRoleSelect",
+    "addAccessButton",
+    "refreshDbButton",
+    "exportDbButton",
+    "importDbInput",
+    "importDbButton",
+    "clearImportButton",
+  ]) {
     $(id).disabled = !canEdit;
   }
 }
 
-function renderPipelineOptions() {
-  const select = $("pipelineSelect");
-  select.innerHTML = "";
-  const empty = document.createElement("option");
-  empty.value = "";
-  empty.textContent = state.pipelines.length ? "Select a pipeline" : "No pipelines loaded";
-  select.appendChild(empty);
-  for (const pipeline of state.pipelines) {
-    const option = document.createElement("option");
-    option.value = pipeline.name || pipeline.slug || pipeline.id;
-    option.textContent = `${pipeline.name || pipeline.slug || pipeline.id}${pipeline.version ? ` v${pipeline.version}` : ""}`;
-    select.appendChild(option);
+function currentTarget() {
+  const targets = state.settings?.autopilotTargets || [];
+  return targets.find((target) => target.id === state.activeAutopilotTargetId)
+    || targets.find((target) => target.id === state.settings?.currentAutopilotTargetId)
+    || targets[0]
+    || null;
+}
+
+function renderAutopilotTargets() {
+  const targets = state.settings?.autopilotTargets || [];
+  for (const id of ["autopilotTargetSelect", "chatAutopilotSelect"]) {
+    const select = $(id);
+    if (!select) continue;
+    select.innerHTML = "";
+    for (const target of targets) {
+      const option = document.createElement("option");
+      option.value = target.id;
+      option.textContent = target.label;
+      select.appendChild(option);
+    }
+    select.value = currentTarget()?.id || "";
   }
+}
+
+function renderPipelineOptions() {
+  for (const id of ["pipelineSelect", "chatPipelineSelect"]) {
+    const select = $(id);
+    if (!select) continue;
+    select.innerHTML = "";
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = state.pipelines.length ? "Select a pipeline" : "Use target default";
+    select.appendChild(empty);
+    for (const pipeline of state.pipelines) {
+      const option = document.createElement("option");
+      option.value = pipeline.name || pipeline.slug || pipeline.id;
+      option.textContent = `${pipeline.name || pipeline.slug || pipeline.id}${pipeline.version ? ` v${pipeline.version}` : ""}`;
+      select.appendChild(option);
+    }
+    const selected = id === "chatPipelineSelect" ? state.activePipelineName : $("pipelineInput").value;
+    if (selected) select.value = selected;
+  }
+}
+
+function renderChatRunControls() {
+  renderAutopilotTargets();
+  renderPipelineOptions();
+  const target = currentTarget();
+  if (target && !$("chatPipelineSelect").value && !state.activePipelineName) {
+    state.activePipelineName = target.defaultPipeline;
+    localStorage.setItem("chat_wapp_pipeline", state.activePipelineName);
+  }
+  $("chatPipelineSelect").value = state.activePipelineName || target?.defaultPipeline || "";
 }
 
 function renderAccessRules() {
@@ -370,12 +450,20 @@ async function saveSettings() {
     const payload = await api("/api/settings", {
       method: "PUT",
       body: JSON.stringify({
+        autopilotTargetId: currentTarget()?.id,
+        autopilotLabel: $("autopilotLabelInput").value.trim(),
         autopilotUrl: $("autopilotUrlInput").value.trim(),
         defaultPipeline: $("pipelineInput").value.trim(),
       }),
     });
     state.settings = payload.settings;
+    state.activeAutopilotTargetId = payload.settings.currentAutopilotTargetId;
+    state.activePipelineName = currentTarget()?.defaultPipeline || payload.settings.defaultPipeline || "";
+    localStorage.setItem("chat_wapp_autopilot_target", state.activeAutopilotTargetId);
+    localStorage.setItem("chat_wapp_pipeline", state.activePipelineName);
     renderSettings();
+    renderAutopilotTargets();
+    renderChatRunControls();
     setStatus("Settings saved");
   } catch (error) {
     setStatus(error.message);
@@ -385,19 +473,228 @@ async function saveSettings() {
 async function loadPipelines() {
   try {
     setStatus("Authorizing pipeline list");
-    const prepared = await api("/api/autopilot/pipelines", { method: "POST", body: "{}" });
+    const autopilotTargetId = currentTarget()?.id || state.activeAutopilotTargetId;
+    const prepared = await api("/api/autopilot/pipelines", {
+      method: "POST",
+      body: JSON.stringify({ autopilotTargetId }),
+    });
     let payload = prepared;
     if (prepared.requiresAutopilotAuth && prepared.triggerRequest) {
       const autopilotAuthorization = await signNip98Request(prepared.triggerRequest);
       payload = await api("/api/autopilot/pipelines", {
         method: "POST",
-        body: JSON.stringify({ autopilotAuthorization }),
+        body: JSON.stringify({ autopilotAuthorization, autopilotTargetId }),
       });
     }
     state.pipelines = payload.pipelines || [];
     savePipelinesCache();
     renderPipelineOptions();
     setStatus(`Loaded ${state.pipelines.length} pipelines`);
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function createAutopilotTarget() {
+  try {
+    const payload = await api("/api/autopilot-targets", {
+      method: "POST",
+      body: JSON.stringify({
+        label: "New Autopilot",
+        url: $("autopilotUrlInput").value.trim() || "http://127.0.0.1:3256",
+        defaultPipeline: $("pipelineInput").value.trim() || "chat-wapp-agent-response",
+      }),
+    });
+    state.settings = payload.settings;
+    state.activeAutopilotTargetId = payload.target.id;
+    state.activePipelineName = payload.target.defaultPipeline;
+    localStorage.setItem("chat_wapp_autopilot_target", state.activeAutopilotTargetId);
+    localStorage.setItem("chat_wapp_pipeline", state.activePipelineName);
+    renderSettings();
+    renderAutopilotTargets();
+    renderChatRunControls();
+    setStatus("Autopilot target added");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function deleteCurrentAutopilotTarget() {
+  const target = currentTarget();
+  if (!target) return;
+  try {
+    const payload = await api(`/api/autopilot-targets/${encodeURIComponent(target.id)}`, { method: "DELETE" });
+    state.settings = payload.settings;
+    state.activeAutopilotTargetId = payload.settings.currentAutopilotTargetId;
+    state.activePipelineName = currentTarget()?.defaultPipeline || "";
+    localStorage.setItem("chat_wapp_autopilot_target", state.activeAutopilotTargetId);
+    localStorage.setItem("chat_wapp_pipeline", state.activePipelineName);
+    renderSettings();
+    renderAutopilotTargets();
+    renderChatRunControls();
+    setStatus("Autopilot target deleted");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function selectAutopilotTarget(targetId) {
+  if (!targetId) return;
+  state.activeAutopilotTargetId = targetId;
+  localStorage.setItem("chat_wapp_autopilot_target", targetId);
+  const target = currentTarget();
+  state.activePipelineName = target?.defaultPipeline || "";
+  localStorage.setItem("chat_wapp_pipeline", state.activePipelineName);
+  try {
+    const payload = await api("/api/autopilot-targets/current", {
+      method: "PUT",
+      body: JSON.stringify({ autopilotTargetId: targetId }),
+    });
+    state.settings = payload.settings;
+  } catch {
+    // Local selection still works for the current browser session.
+  }
+  renderSettings();
+  renderAutopilotTargets();
+  renderChatRunControls();
+}
+
+async function loadDbStatus() {
+  state.dbStatus = await api("/api/db/status");
+  renderDbStatus();
+}
+
+function renderDbStatus() {
+  const meta = $("dbMeta");
+  const list = $("snapshotList");
+  if (!meta || !list) return;
+  const status = state.dbStatus;
+  if (!status) {
+    meta.textContent = "DB status unavailable.";
+    list.innerHTML = "";
+    return;
+  }
+  meta.innerHTML = "";
+  const rows = [
+    ["Path", status.dbPath],
+    ["Size", `${Math.round(Number(status.sizeBytes || 0) / 1024)} KB`],
+    ["Migration", status.migrations?.latest || "none"],
+    ["Pending import", status.pendingImport ? "yes - restart required" : "no"],
+  ];
+  for (const [label, value] of rows) {
+    const div = document.createElement("div");
+    div.innerHTML = `<strong></strong><span></span>`;
+    div.querySelector("strong").textContent = label;
+    div.querySelector("span").textContent = value;
+    meta.appendChild(div);
+  }
+  list.innerHTML = "";
+  for (const snapshot of status.snapshots || []) {
+    const item = document.createElement("div");
+    item.className = "snapshotItem";
+    const info = document.createElement("div");
+    info.innerHTML = `<strong></strong><span></span>`;
+    info.querySelector("strong").textContent = snapshot.filename;
+    info.querySelector("span").textContent = `${snapshot.kind} - ${Math.round(Number(snapshot.sizeBytes || 0) / 1024)} KB`;
+    const actions = document.createElement("div");
+    actions.className = "snapshotActions";
+    const download = document.createElement("button");
+    download.type = "button";
+    download.textContent = "Download";
+    download.addEventListener("click", () => downloadSnapshot(snapshot.filename));
+    const restore = document.createElement("button");
+    restore.type = "button";
+    restore.textContent = "Stage";
+    restore.addEventListener("click", () => stageSnapshot(snapshot.filename));
+    actions.append(download, restore);
+    item.append(info, actions);
+    list.appendChild(item);
+  }
+}
+
+async function exportDbSnapshot() {
+  try {
+    const payload = await api("/api/db/snapshots", {
+      method: "POST",
+      body: JSON.stringify({ note: $("snapshotNoteInput").value.trim() }),
+    });
+    state.dbStatus = payload.status;
+    $("snapshotNoteInput").value = "";
+    renderDbStatus();
+    setStatus("Snapshot exported");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function stageSnapshot(filename) {
+  try {
+    const payload = await api("/api/db/import", {
+      method: "POST",
+      body: JSON.stringify({ filename }),
+    });
+    state.dbStatus = payload.status;
+    renderDbStatus();
+    setStatus("Import staged; restart the app to replace the SQLite DB");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function downloadSnapshot(filename) {
+  try {
+    const res = await fetch(`/api/db/snapshots/${encodeURIComponent(filename)}/download`, {
+      headers: state.token ? { authorization: `Bearer ${state.token}` } : {},
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      throw new Error(payload.error || res.statusText);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function stageUploadedDb() {
+  const file = $("importDbInput").files?.[0];
+  if (!file) {
+    setStatus("Choose a SQLite file first");
+    return;
+  }
+  try {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/api/db/import", {
+      method: "POST",
+      headers: state.token ? { authorization: `Bearer ${state.token}` } : {},
+      body: form,
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(payload.error || res.statusText);
+    state.dbStatus = payload.status;
+    $("importDbInput").value = "";
+    renderDbStatus();
+    setStatus("Import staged; restart the app to replace the SQLite DB");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function clearPendingImport() {
+  try {
+    const payload = await api("/api/db/import", { method: "DELETE" });
+    state.dbStatus = payload.status;
+    renderDbStatus();
+    setStatus("Pending import cleared");
   } catch (error) {
     setStatus(error.message);
   }
@@ -493,7 +790,11 @@ async function sendMessage(event) {
   try {
     const payload = await api(`/api/chats/${encodeURIComponent(state.activeChatId)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({
+        content,
+        autopilotTargetId: currentTarget()?.id || state.activeAutopilotTargetId,
+        pipelineName: $("chatPipelineSelect").value || state.activePipelineName || currentTarget()?.defaultPipeline,
+      }),
     });
     renderMessages(payload.messages || []);
     if (payload.requiresAutopilotAuth && payload.triggerRequest) {
@@ -567,9 +868,25 @@ $("homeSettingsButton").addEventListener("click", () => navigate("/settings"));
 $("settingsHomeButton").addEventListener("click", () => navigate("/"));
 $("saveSettingsButton").addEventListener("click", saveSettings);
 $("loadPipelinesButton").addEventListener("click", loadPipelines);
+$("newTargetButton").addEventListener("click", createAutopilotTarget);
+$("deleteTargetButton").addEventListener("click", deleteCurrentAutopilotTarget);
 $("addAccessButton").addEventListener("click", addAccess);
+$("refreshDbButton").addEventListener("click", loadDbStatus);
+$("exportDbButton").addEventListener("click", exportDbSnapshot);
+$("importDbButton").addEventListener("click", stageUploadedDb);
+$("clearImportButton").addEventListener("click", clearPendingImport);
+$("autopilotTargetSelect").addEventListener("change", (event) => {
+  void selectAutopilotTarget(event.target.value);
+});
+$("chatAutopilotSelect").addEventListener("change", (event) => {
+  void selectAutopilotTarget(event.target.value);
+});
 $("pipelineSelect").addEventListener("change", () => {
   if ($("pipelineSelect").value) $("pipelineInput").value = $("pipelineSelect").value;
+});
+$("chatPipelineSelect").addEventListener("change", () => {
+  state.activePipelineName = $("chatPipelineSelect").value || currentTarget()?.defaultPipeline || "";
+  localStorage.setItem("chat_wapp_pipeline", state.activePipelineName);
 });
 $("composer").addEventListener("submit", sendMessage);
 $("messageInput").addEventListener("keydown", (event) => {
