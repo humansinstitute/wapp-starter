@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "setup": "bun install",
     "start": "bun src/server.ts",
     "dev": "bun --watch src/server.ts",
     "check": "tsc --noEmit",
