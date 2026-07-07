@@ -90,6 +90,53 @@ button:disabled {
   min-width: 190px;
 }
 
+.loginActions {
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+  width: min(100%, 420px);
+  margin: 0 auto;
+}
+
+.nsecLogin {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  text-align: left;
+}
+
+.nsecLogin summary {
+  cursor: pointer;
+  color: var(--accent-dark);
+  font-weight: 650;
+}
+
+.nsecLogin label {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.nsecLogin input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--ink);
+  background: var(--panel);
+}
+
+.nsecLogin button {
+  width: 100%;
+  margin-top: 12px;
+  min-width: 0;
+}
+
 .error {
   min-height: 22px;
   color: #9b2d1f;

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "setup": "bun install",
+    "build:browser-login": "bun build src/browser-login-crypto.ts --outfile public/nostr-login.js --target browser --format esm --minify",
     "start": "bun src/server.ts",
     "dev": "bun --watch src/server.ts",
     "check": "tsc --noEmit",

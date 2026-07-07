@@ -1,3 +1,5 @@
+import { derivePubkeyFromNsec, signLoginChallengeWithNsec } from "/nostr-login.js";
+
 const PROFILE_CACHE_KEY = "chat_wapp_profiles_v1";
 const PIPELINES_CACHE_KEY = "chat_wapp_pipelines_v1";
 const PROFILE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -135,33 +137,55 @@ async function renderRoute() {
   showOnly("home");
 }
 
-async function login() {
+async function finishLoginWithSigner(getPubkey, signChallenge) {
   $("loginError").textContent = "";
+  const pubkey = await getPubkey();
+  const challenge = await api("/api/auth/challenge", {
+    method: "POST",
+    body: JSON.stringify({ pubkey }),
+  });
+  const event = await signChallenge(challenge);
+  const result = await api("/api/auth/verify", {
+    method: "POST",
+    body: JSON.stringify({ event }),
+  });
+  state.token = result.token;
+  state.me = result;
+  localStorage.setItem("chat_wapp_token", result.token);
+  if (window.location.pathname !== "/") history.pushState({}, "", "/");
+  await bootApp();
+}
+
+async function login() {
   if (!window.nostr) {
     $("loginError").textContent = "No Nostr browser extension was found.";
     return;
   }
   try {
-    const pubkey = await window.nostr.getPublicKey();
-    const challenge = await api("/api/auth/challenge", {
-      method: "POST",
-      body: JSON.stringify({ pubkey }),
-    });
-    const event = await window.nostr.signEvent({
-      kind: 22242,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [["challenge", challenge.nonce], ["client", "chat-wapp"]],
-      content: challenge.content,
-    });
-    const result = await api("/api/auth/verify", {
-      method: "POST",
-      body: JSON.stringify({ event }),
-    });
-    state.token = result.token;
-    state.me = result;
-    localStorage.setItem("chat_wapp_token", result.token);
-    if (window.location.pathname !== "/") history.pushState({}, "", "/");
-    await bootApp();
+    await finishLoginWithSigner(
+      () => window.nostr.getPublicKey(),
+      (challenge) => window.nostr.signEvent({
+        kind: 22242,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["challenge", challenge.nonce], ["client", "chat-wapp"]],
+        content: challenge.content,
+      }),
+    );
+  } catch (error) {
+    $("loginError").textContent = error.message;
+  }
+}
+
+async function loginWithNsec() {
+  $("loginError").textContent = "";
+  const input = $("nsecInput");
+  const nsec = input.value.trim();
+  try {
+    await finishLoginWithSigner(
+      () => derivePubkeyFromNsec(nsec),
+      (challenge) => signLoginChallengeWithNsec(nsec, challenge),
+    );
+    input.value = "";
   } catch (error) {
     $("loginError").textContent = error.message;
   }
@@ -183,6 +207,7 @@ function logout() {
   state.activeChatId = "";
   localStorage.removeItem("chat_wapp_token");
   localStorage.removeItem("chat_wapp_chat");
+  $("nsecInput").value = "";
   stopPolling();
   showOnly("login");
 }
@@ -860,6 +885,13 @@ function startPolling() {
 }
 
 $("loginButton").addEventListener("click", login);
+$("nsecLoginButton").addEventListener("click", loginWithNsec);
+$("nsecInput").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void loginWithNsec();
+  }
+});
 $("logoutButton").addEventListener("click", logout);
 $("newChatButton").addEventListener("click", newChat);
 $("homeActButton").addEventListener("click", () => navigate("/act"));

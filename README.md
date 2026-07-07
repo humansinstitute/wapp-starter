@@ -61,11 +61,11 @@ Generated apps should not include a project-level PM2 ecosystem file. Autopilot 
 
 ## What The App Does
 
-The first screen asks the user to sign in with a Nostr browser extension. After login, users can create chats, send messages, choose an Autopilot target, choose a pipeline, and inspect local SQLite database operations.
+The first screen asks the user to sign in with a Nostr browser extension or by entering an `nsec` directly. Direct `nsec` login signs the same challenge in the browser without storing or sending the private key. After login, users can create chats, send messages, choose an Autopilot target, choose a pipeline, and inspect local SQLite database operations.
 
 Message flow:
 
-1. Browser signs a login challenge with `window.nostr`.
+1. Browser signs a login challenge with `window.nostr`, or signs it locally from the entered `nsec`.
 2. The WApp stores chats and messages in SQLite.
 3. `POST /api/chats/:chatId/messages` creates a pending pipeline run.
 4. The browser signs the Autopilot pipeline trigger with NIP-98.

@@ -13,7 +13,17 @@
           <h1>Pipeline Chat</h1>
           <p>Sign in with Nostr to start a local chat backed by a Wingmen pipeline webhook.</p>
         </div>
-        <button id="loginButton">Sign in with Nostr</button>
+        <div class="loginActions">
+          <button id="loginButton" type="button">Sign in with Extension</button>
+          <details class="nsecLogin">
+            <summary>Use nsec directly</summary>
+            <label>
+              <span>Private key</span>
+              <input id="nsecInput" type="password" autocomplete="off" spellcheck="false" placeholder="nsec1..." />
+            </label>
+            <button id="nsecLoginButton" type="button">Sign in with nsec</button>
+          </details>
+        </div>
         <p class="error" id="loginError"></p>
       </section>
 
