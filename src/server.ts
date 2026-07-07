@@ -93,6 +93,36 @@ function normalizeAutopilotUrl(value: unknown): string | null {
   }
 }
 
+function configuredAutopilotPublicHosts(): Set<string> {
+  const hosts = new Set<string>(["rick.wingman.com"]);
+  for (const value of [
+    process.env.WAPP_AUTOPILOT_PUBLIC_URL,
+    process.env.WINGMAN_PUBLIC_URL,
+    process.env.PUBLIC_WINGMAN_URL,
+  ]) {
+    if (!value?.trim()) continue;
+    try {
+      hosts.add(new URL(value.trim()).hostname);
+    } catch {
+      hosts.add(value.trim());
+    }
+  }
+  return hosts;
+}
+
+function resolveAutopilotServerUrl(value: string | null | undefined): string {
+  const normalized = normalizeAutopilotUrl(value) || WINGMAN_URL;
+  try {
+    const url = new URL(normalized);
+    if (configuredAutopilotPublicHosts().has(url.hostname)) {
+      return WINGMAN_URL;
+    }
+  } catch {
+    return WINGMAN_URL;
+  }
+  return normalized;
+}
+
 function normalizePipelineName(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -104,7 +134,7 @@ function getRequestedAutopilotTarget(value: unknown): AutopilotTarget {
 
 function buildAutopilotPipelinesRequest(target = getCurrentAutopilotTarget()) {
   return {
-    url: new URL("/api/pipelines/definitions", target.url).toString(),
+    url: new URL("/api/pipelines/definitions", resolveAutopilotServerUrl(target.url)).toString(),
     method: "GET" as const,
   };
 }
@@ -423,7 +453,7 @@ async function handleApi(req: Request, url: URL): Promise<Response | null> {
       webhookToken,
       autopilotTargetId: autopilotTarget.id,
       autopilotLabel: autopilotTarget.label,
-      autopilotUrl: autopilotTarget.url || settings.autopilotUrl,
+      autopilotUrl: resolveAutopilotServerUrl(autopilotTarget.url || settings.autopilotUrl),
       pipelineName,
     });
     db.query(`

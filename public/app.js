@@ -1,4 +1,4 @@
-import { derivePubkeyFromNsec, signLoginChallengeWithNsec } from "/nostr-login.js";
+import { derivePubkeyFromNsec, signEventWithNsec, signLoginChallengeWithNsec } from "/nostr-login.js";
 
 const PROFILE_CACHE_KEY = "chat_wapp_profiles_v1";
 const PIPELINES_CACHE_KEY = "chat_wapp_pipelines_v1";
@@ -23,6 +23,7 @@ const state = {
   pollTimer: null,
   route: window.location.pathname,
   profiles: loadProfileCache(),
+  directNsec: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -162,6 +163,7 @@ async function login() {
     return;
   }
   try {
+    state.directNsec = "";
     await finishLoginWithSigner(
       () => window.nostr.getPublicKey(),
       (challenge) => window.nostr.signEvent({
@@ -185,6 +187,7 @@ async function loginWithNsec() {
       () => derivePubkeyFromNsec(nsec),
       (challenge) => signLoginChallengeWithNsec(nsec, challenge),
     );
+    state.directNsec = nsec;
     input.value = "";
   } catch (error) {
     $("loginError").textContent = error.message;
@@ -205,6 +208,7 @@ function logout() {
   state.token = "";
   state.me = null;
   state.activeChatId = "";
+  state.directNsec = "";
   localStorage.removeItem("chat_wapp_token");
   localStorage.removeItem("chat_wapp_chat");
   $("nsecInput").value = "";
@@ -841,7 +845,6 @@ async function sendMessage(event) {
 }
 
 async function signNip98Request(triggerRequest) {
-  if (!window.nostr) throw new Error("No Nostr browser extension was found.");
   const tags = [
     ["u", triggerRequest.url],
     ["method", triggerRequest.method || "POST"],
@@ -850,12 +853,18 @@ async function signNip98Request(triggerRequest) {
     const bodyJson = JSON.stringify(triggerRequest.body);
     tags.push(["payload", await sha256Hex(bodyJson)]);
   }
-  const event = await window.nostr.signEvent({
+  const eventTemplate = {
     kind: 27235,
     created_at: Math.floor(Date.now() / 1000),
     tags,
     content: "",
-  });
+  };
+  const event = state.directNsec
+    ? signEventWithNsec(state.directNsec, eventTemplate)
+    : window.nostr
+      ? await window.nostr.signEvent(eventTemplate)
+      : null;
+  if (!event) throw new Error("No Nostr signer available. Sign in with nsec or use a browser extension.");
   return `Nostr ${base64Utf8(JSON.stringify(event))}`;
 }
 

@@ -37,3 +37,10 @@ export function signLoginChallengeWithNsec(input: string, challenge: { nonce: st
     decodeNsec(input),
   );
 }
+
+export function signEventWithNsec(
+  input: string,
+  event: { kind: number; created_at: number; tags: string[][]; content: string },
+) {
+  return finalizeEvent(event, decodeNsec(input));
+}
