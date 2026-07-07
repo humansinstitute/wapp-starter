@@ -94,7 +94,7 @@ function normalizeAutopilotUrl(value: unknown): string | null {
 }
 
 function configuredAutopilotPublicHosts(): Set<string> {
-  const hosts = new Set<string>(["rick.wingman.com"]);
+  const hosts = new Set<string>(["rick.runwingman.com"]);
   for (const value of [
     process.env.WAPP_AUTOPILOT_PUBLIC_URL,
     process.env.WINGMAN_PUBLIC_URL,
